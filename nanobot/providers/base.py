@@ -1,4 +1,13 @@
-"""Base LLM provider interface."""
+"""LLM提供者基类 - 定义与大语言模型交互的统一接口。
+
+该模块提供了:
+- ToolCallRequest: 工具调用请求数据结构
+- LLMResponse: LLM响应数据结构
+- LLMProvider: 抽象基类，定义LLM提供者的接口规范
+
+各LLM提供者(如OpenAI、Anthropic、DeepSeek等)需要实现此接口，
+以保持与nanobot框架的兼容性。
+"""
 
 import asyncio
 from abc import ABC, abstractmethod
@@ -10,7 +19,13 @@ from loguru import logger
 
 @dataclass
 class ToolCallRequest:
-    """A tool call request from the LLM."""
+    """LLM发起的工具调用请求。
+
+    属性:
+        id: 工具调用唯一标识符
+        name: 工具名称
+        arguments: 工具参数字典
+    """
     id: str
     name: str
     arguments: dict[str, Any]
@@ -18,7 +33,16 @@ class ToolCallRequest:
 
 @dataclass
 class LLMResponse:
-    """Response from an LLM provider."""
+    """LLM提供者的响应数据结构。
+
+    属性:
+        content: 文本内容 (当LLM直接回复时)
+        tool_calls: 工具调用请求列表 (当LLM请求执行工具时)
+        finish_reason: 结束原因 ("stop"=正常结束, "tool_calls"=需要工具调用, "error"=错误)
+        usage: token使用量统计
+        reasoning_content: 推理内容 (如Kimi、DeepSeek-R1等模型的思维链)
+        thinking_blocks: 思考块列表 (如Anthropic扩展思考模式)
+    """
     content: str | None
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
     finish_reason: str = "stop"
@@ -28,19 +52,29 @@ class LLMResponse:
     
     @property
     def has_tool_calls(self) -> bool:
-        """Check if response contains tool calls."""
+        """检查响应是否包含工具调用请求。
+
+        Returns:
+            如果有工具调用返回True，否则返回False
+        """
         return len(self.tool_calls) > 0
 
 
 class LLMProvider(ABC):
     """
-    Abstract base class for LLM providers.
-    
-    Implementations should handle the specifics of each provider's API
-    while maintaining a consistent interface.
+    LLM提供者的抽象基类。
+
+    实现类需要处理各提供者API的具体细节，
+    同时保持统一的接口规范。
+
+    主要特性:
+    - 重试机制: 自动重试临时性错误 (如Rate Limit、服务器错误等)
+    - 消息清洗: 处理空内容、规范化消息格式等
     """
 
+    # 重试延迟配置 (秒)
     _CHAT_RETRY_DELAYS = (1, 2, 4)
+    # 临时性错误关键词匹配
     _TRANSIENT_ERROR_MARKERS = (
         "429",
         "rate limit",
@@ -57,15 +91,27 @@ class LLMProvider(ABC):
     )
 
     def __init__(self, api_key: str | None = None, api_base: str | None = None):
+        """初始化LLM提供者。
+
+        Args:
+            api_key: API密钥 (可选)
+            api_base: API基础URL (可选)
+        """
         self.api_key = api_key
         self.api_base = api_base
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Replace empty text content that causes provider 400 errors.
+        """替换会导致提供者400错误的空内容。
 
-        Empty content can appear when MCP tools return nothing. Most providers
-        reject empty-string content or empty text blocks in list content.
+        当MCP工具返回空内容时，大多数提供商会拒绝空字符串内容
+        或列表内容中的空文本块。此方法清理这些无效内容。
+
+        Args:
+            messages: 消息列表
+
+        Returns:
+            清洗后的消息列表
         """
         result: list[dict[str, Any]] = []
         for msg in messages:
@@ -111,7 +157,15 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         allowed_keys: frozenset[str],
     ) -> list[dict[str, Any]]:
-        """Keep only provider-safe message keys and normalize assistant content."""
+        """只保留提供者安全的消息键，并规范化助手消息内容。
+
+        Args:
+            messages: 原始消息列表
+            allowed_keys: 允许保留的键集合
+
+        Returns:
+            清洗后的消息列表
+        """
         sanitized = []
         for msg in messages:
             clean = {k: v for k, v in msg.items() if k in allowed_keys}
@@ -130,23 +184,31 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
     ) -> LLMResponse:
-        """
-        Send a chat completion request.
-        
+        """发送聊天完成请求。
+
         Args:
-            messages: List of message dicts with 'role' and 'content'.
-            tools: Optional list of tool definitions.
-            model: Model identifier (provider-specific).
-            max_tokens: Maximum tokens in response.
-            temperature: Sampling temperature.
-        
+            messages: 消息列表，每条消息包含'role'和'content'
+            tools: 可选的工具定义列表
+            model: 模型标识符 (提供者特定)
+            max_tokens: 响应最大token数
+            temperature: 采样温度
+            reasoning_effort: 推理努力程度 (可选)
+
         Returns:
-            LLMResponse with content and/or tool calls.
+            LLMResponse: 包含内容和/或工具调用
         """
         pass
 
     @classmethod
     def _is_transient_error(cls, content: str | None) -> bool:
+        """判断是否为临时性错误 (可重试)。
+
+        Args:
+            content: 错误信息内容
+
+        Returns:
+            如果是临时性错误返回True
+        """
         err = (content or "").lower()
         return any(marker in err for marker in cls._TRANSIENT_ERROR_MARKERS)
 
@@ -159,7 +221,25 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
     ) -> LLMResponse:
-        """Call chat() with retry on transient provider failures."""
+        """调用chat方法，临时错误时自动重试。
+
+        使用指数退避策略重试，包含以下错误类型:
+        - Rate limit (429)
+        - 服务器错误 (500-504)
+        - 超时错误
+        - 连接错误
+
+        Args:
+            messages: 消息列表
+            tools: 可选的工具定义
+            model: 模型标识符
+            max_tokens: 最大token数
+            temperature: 采样温度
+            reasoning_effort: 推理努力程度
+
+        Returns:
+            LLMResponse: 最终响应
+        """
         for attempt, delay in enumerate(self._CHAT_RETRY_DELAYS, start=1):
             try:
                 response = await self.chat(
@@ -212,5 +292,9 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def get_default_model(self) -> str:
-        """Get the default model for this provider."""
+        """获取此提供者的默认模型。
+
+        Returns:
+            默认模型名称
+        """
         pass

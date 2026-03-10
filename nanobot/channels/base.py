@@ -1,4 +1,15 @@
-"""Base channel interface for chat platforms."""
+"""渠道基类 - 定义聊天平台渠道的统一接口。
+
+该模块提供:
+- BaseChannel: 抽象基类，所有聊天渠道(Telegram、Discord等)需继承实现
+
+每个渠道需要实现以下方法:
+- start(): 启动渠道并开始监听消息
+- stop(): 停止渠道并清理资源
+- send(): 发送消息到聊天平台
+
+还包括权限控制功能(is_allowed)用于限制访问。
+"""
 
 from abc import ABC, abstractmethod
 from typing import Any
@@ -11,21 +22,20 @@ from nanobot.bus.queue import MessageBus
 
 class BaseChannel(ABC):
     """
-    Abstract base class for chat channel implementations.
+    聊天渠道实现的抽象基类。
 
-    Each channel (Telegram, Discord, etc.) should implement this interface
-    to integrate with the nanobot message bus.
+    每个渠道(如Telegram、Discord等)应实现此接口
+    以集成到nanobot消息总线。
     """
 
     name: str = "base"
 
     def __init__(self, config: Any, bus: MessageBus):
-        """
-        Initialize the channel.
+        """初始化渠道。
 
         Args:
-            config: Channel-specific configuration.
-            bus: The message bus for communication.
+            config: 渠道特定配置
+            bus: 用于通信的消息总线
         """
         self.config = config
         self.bus = bus
@@ -33,33 +43,43 @@ class BaseChannel(ABC):
 
     @abstractmethod
     async def start(self) -> None:
-        """
-        Start the channel and begin listening for messages.
+        """启动渠道并开始监听消息。
 
-        This should be a long-running async task that:
-        1. Connects to the chat platform
-        2. Listens for incoming messages
-        3. Forwards messages to the bus via _handle_message()
+        这应该是一个长期运行的异步任务:
+        1. 连接到聊天平台
+        2. 监听传入消息
+        3. 通过_handle_message()转发消息到总线
         """
         pass
 
     @abstractmethod
     async def stop(self) -> None:
-        """Stop the channel and clean up resources."""
+        """停止渠道并清理资源。"""
         pass
 
     @abstractmethod
     async def send(self, msg: OutboundMessage) -> None:
-        """
-        Send a message through this channel.
+        """通过此渠道发送消息。
 
         Args:
-            msg: The message to send.
+            msg: 要发送的消息
         """
         pass
 
     def is_allowed(self, sender_id: str) -> bool:
-        """Check if *sender_id* is permitted.  Empty list → deny all; ``"*"`` → allow all."""
+        """检查发送者是否被允许。
+
+        权限规则:
+        - allow_from为空列表 → 拒绝所有访问
+        - allow_from包含"*" → 允许所有访问
+        - 否则只允许列表中的用户ID
+
+        Args:
+            sender_id: 发送者标识符
+
+        Returns:
+            允许返回True，拒绝返回False
+        """
         allow_list = getattr(self.config, "allow_from", [])
         if not allow_list:
             logger.warning("{}: allow_from is empty — all access denied", self.name)
@@ -77,18 +97,17 @@ class BaseChannel(ABC):
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
     ) -> None:
-        """
-        Handle an incoming message from the chat platform.
+        """处理来自聊天平台的传入消息。
 
-        This method checks permissions and forwards to the bus.
+        此方法检查权限并将消息转发到总线。
 
         Args:
-            sender_id: The sender's identifier.
-            chat_id: The chat/channel identifier.
-            content: Message text content.
-            media: Optional list of media URLs.
-            metadata: Optional channel-specific metadata.
-            session_key: Optional session key override (e.g. thread-scoped sessions).
+            sender_id: 发送者标识符
+            chat_id: 聊天/频道标识符
+            content: 消息文本内容
+            media: 可选的媒体URL列表
+            metadata: 可选的渠道特定元数据
+            session_key: 可选的会话键覆盖 (如线程作用域会话)
         """
         if not self.is_allowed(sender_id):
             logger.warning(
@@ -112,5 +131,9 @@ class BaseChannel(ABC):
 
     @property
     def is_running(self) -> bool:
-        """Check if the channel is running."""
+        """检查渠道是否正在运行。
+
+        Returns:
+            运行中返回True，否则返回False
+        """
         return self._running
